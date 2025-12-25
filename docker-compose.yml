@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: excdb
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:8.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - ./redis-data:/data
+    ports:
+      - "6379:6379"
+
+  exc:
+    image: ghcr.io/bagble/exc:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    env_file:
+      - .env
+    volumes:
+      - ./exchanges:/usr/src/app/exchanges:ro
+      - ./logs:/usr/src/app/logs
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # 이미지 내에 curl이 설치되어 있어야 작동함
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mm:
+    image: ghcr.io/bagble/mm:latest
+    container_name: mm
+    restart: unless-stopped
+    pull_policy: always
+    depends_on:
+      exc:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - FALLBACK_PRICE=32000
+      - TICKSIZE=10
+      - WHALE_RATIO=0.07
+      - SYMBOL=EXC
+      - SSE_URL=http://exc:8000/api/sse/data/EXC?partial_book=true
+      - ORDER_API_BASE=http://exc:8000/api/v1/market/orders
+      - SPREAD_FILLER_THRESHOLD=10
+      - ONEWAY_PROB=0.008
+      - CANCEL_TOP_PROB=0.05
+      - ONEWAY_DURATION_MIN=20
+      - ONEWAY_DURATION_MAX=120
+      - MIN_PRICE=10
+      - UPWARD_BIAS=0.5
+      - MARKET_WARMUP_SECONDS=60
+      - GAP_PROBABILITY=0.3
+      - GAP_MIN_TICKS=-500
+      - GAP_MAX_TICKS=1000
+      - PRICE_SAVE_FILE=/app/logs/last_price.json
+      - LOG_FILE_PATH=/app/logs/trading_bot.log
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
